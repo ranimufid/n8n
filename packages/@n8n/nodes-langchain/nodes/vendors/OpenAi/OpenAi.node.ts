@@ -15,7 +15,11 @@ export class OpenAi extends VersionedNodeType {
 			name: 'openAi',
 			icon: { light: 'file:openAi.svg', dark: 'file:openAi.dark.svg' },
 			group: ['transform'],
+<<<<<<< HEAD
 			defaultVersion: 2.1,
+=======
+			defaultVersion: 2.3,
+>>>>>>> 5f2c32ad6e (feat(OpenAI Node): Use dynamic model selection for image edit and update analyze model filter (#29223))
 			subtitle: `={{(${prettifyOperation})($parameter.resource, $parameter.operation)}}`,
 			description: 'Message an assistant or GPT, analyze images, generate audio, etc.',
 			codex: {
@@ -70,6 +74,11 @@ export class OpenAi extends VersionedNodeType {
 			1.8: new OpenAiV1(baseDescription),
 			2: new OpenAiV2(baseDescription),
 			2.1: new OpenAiV2(baseDescription),
+<<<<<<< HEAD
+=======
+			2.2: new OpenAiV2(baseDescription),
+			2.3: new OpenAiV2(baseDescription),
+>>>>>>> 5f2c32ad6e (feat(OpenAI Node): Use dynamic model selection for image edit and update analyze model filter (#29223))
 		};
 
 		super(nodeVersions, baseDescription);

@@ -23,7 +23,11 @@ export class OpenAiV2 implements INodeType {
 	constructor(baseDescription: INodeTypeBaseDescription) {
 		this.description = {
 			...baseDescription,
+<<<<<<< HEAD
 			version: [2, 2.1],
+=======
+			version: [2, 2.1, 2.2, 2.3],
+>>>>>>> 5f2c32ad6e (feat(OpenAI Node): Use dynamic model selection for image edit and update analyze model filter (#29223))
 			defaults: {
 				name: 'OpenAI',
 			},
