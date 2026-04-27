@@ -136,7 +136,7 @@ watch(
 );
 
 // Keep in sync with AgentIntegrationsPanel.integrationConfigs
-const KNOWN_TRIGGER_TYPES = ['slack', 'telegram'] as const;
+const KNOWN_TRIGGER_TYPES = ['schedule', 'slack', 'telegram'] as const;
 
 function onConnectedTriggersUpdate(list: string[]) {
 	connectedTriggers.value = list;

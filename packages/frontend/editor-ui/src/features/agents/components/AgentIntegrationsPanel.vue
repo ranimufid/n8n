@@ -12,10 +12,14 @@ import {
 	disconnectIntegration,
 	getIntegrationStatus,
 } from '../composables/useAgentApi';
+import AgentScheduleTriggerCard from './AgentScheduleTriggerCard.vue';
+
+const SCHEDULE_INTEGRATION_TYPE = 'schedule';
 const props = defineProps<{
 	projectId: string;
 	agentId: string;
 	agentName: string;
+	isPublished: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -86,6 +90,7 @@ const errorIsConflict = ref<Record<string, boolean>>({});
 const credentialsLoading = ref(false);
 const copied = ref(false);
 const showManifest = ref(false);
+const scheduleActive = ref(false);
 
 function isConnected(type: string): boolean {
 	return statuses.value[type] === 'connected';
@@ -194,9 +199,15 @@ async function copyManifest() {
 }
 
 function computeConnectedTriggers(): string[] {
-	return Object.keys(statuses.value)
+	const triggers = Object.keys(statuses.value)
 		.filter((t) => statuses.value[t] === 'connected')
 		.sort();
+
+	if (scheduleActive.value) {
+		triggers.push(SCHEDULE_INTEGRATION_TYPE);
+	}
+
+	return triggers.sort();
 }
 
 function emitConnectedTriggers() {
@@ -214,17 +225,38 @@ async function fetchStatus() {
 			statuses.value[config.type] = 'disconnected';
 			connectedCredentials.value[config.type] = '';
 		}
+		scheduleActive.value = false;
 		for (const integration of result.integrations ?? []) {
-			statuses.value[integration.type] = 'connected';
-			connectedCredentials.value[integration.type] = integration.credentialId;
+			if (integration.type === SCHEDULE_INTEGRATION_TYPE) {
+				scheduleActive.value = true;
+				continue;
+			}
+
+			if (typeof integration.credentialId === 'string') {
+				statuses.value[integration.type] = 'connected';
+				connectedCredentials.value[integration.type] = integration.credentialId;
+			}
 		}
 	} catch {
 		for (const config of integrationConfigs) {
 			statuses.value[config.type] = 'disconnected';
 			connectedCredentials.value[config.type] = '';
 		}
+		scheduleActive.value = false;
 	}
 	emitConnectedTriggers();
+}
+
+function onScheduleStatusChange(active: boolean) {
+	scheduleActive.value = active;
+	emitConnectedTriggers();
+}
+
+function onScheduleTriggerAdded() {
+	emit('trigger-added', {
+		triggerType: SCHEDULE_INTEGRATION_TYPE,
+		triggers: computeConnectedTriggers(),
+	});
 }
 
 async function fetchCredentials() {
@@ -335,6 +367,13 @@ onMounted(async () => {
 
 <template>
 	<div :class="$style.panel">
+		<AgentScheduleTriggerCard
+			:project-id="projectId"
+			:agent-id="agentId"
+			:is-published="isPublished"
+			@status-change="onScheduleStatusChange"
+			@trigger-added="onScheduleTriggerAdded"
+		/>
 		<N8nCard v-for="config in integrationConfigs" :key="config.type" :class="$style.card">
 			<template #header>
 				<div :class="$style.cardHeader">

@@ -1,4 +1,9 @@
-import type { AgentBuilderMessagesResponse, AgentPersistedMessageDto } from '@n8n/api-types';
+import type {
+	AgentBuilderMessagesResponse,
+	AgentIntegrationStatusResponse,
+	AgentPersistedMessageDto,
+	AgentScheduleConfig,
+} from '@n8n/api-types';
 import { makeRestApiRequest } from '@n8n/rest-api-client';
 import type { IRestApiContext } from '@n8n/rest-api-client';
 import type { AgentResource, AgentJsonConfig } from '../types';
@@ -95,11 +100,61 @@ export const getIntegrationStatus = async (
 	context: IRestApiContext,
 	projectId: string,
 	agentId: string,
-): Promise<{ status: string; integrations?: Array<{ type: string; credentialId: string }> }> => {
-	return await makeRestApiRequest(
+): Promise<AgentIntegrationStatusResponse> => {
+	return await makeRestApiRequest<AgentIntegrationStatusResponse>(
 		context,
 		'GET',
 		`/projects/${projectId}/agents/v2/${agentId}/integrations/status`,
+	);
+};
+
+export const getScheduleIntegration = async (
+	context: IRestApiContext,
+	projectId: string,
+	agentId: string,
+): Promise<AgentScheduleConfig> => {
+	return await makeRestApiRequest<AgentScheduleConfig>(
+		context,
+		'GET',
+		`/projects/${projectId}/agents/v2/${agentId}/integrations/schedule`,
+	);
+};
+
+export const updateScheduleIntegration = async (
+	context: IRestApiContext,
+	projectId: string,
+	agentId: string,
+	data: { cronExpression: string; wakeUpPrompt?: string },
+): Promise<AgentScheduleConfig> => {
+	return await makeRestApiRequest<AgentScheduleConfig>(
+		context,
+		'PUT',
+		`/projects/${projectId}/agents/v2/${agentId}/integrations/schedule`,
+		data,
+	);
+};
+
+export const activateScheduleIntegration = async (
+	context: IRestApiContext,
+	projectId: string,
+	agentId: string,
+): Promise<AgentScheduleConfig> => {
+	return await makeRestApiRequest<AgentScheduleConfig>(
+		context,
+		'POST',
+		`/projects/${projectId}/agents/v2/${agentId}/integrations/schedule/activate`,
+	);
+};
+
+export const deactivateScheduleIntegration = async (
+	context: IRestApiContext,
+	projectId: string,
+	agentId: string,
+): Promise<AgentScheduleConfig> => {
+	return await makeRestApiRequest<AgentScheduleConfig>(
+		context,
+		'POST',
+		`/projects/${projectId}/agents/v2/${agentId}/integrations/schedule/deactivate`,
 	);
 };
 

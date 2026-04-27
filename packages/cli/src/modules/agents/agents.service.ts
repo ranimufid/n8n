@@ -53,6 +53,17 @@ import { AgentPublishedVersionRepository } from './repositories/agent-published-
 import { AgentRepository } from './repositories/agent.repository';
 import { AgentSecureRuntime } from './runtime/agent-secure-runtime';
 
+const SCHEDULE_INTEGRATION_TYPE = 'schedule';
+
+function isScheduleIntegration(
+	integration: Agent['integrations'][number] | null | undefined,
+): integration is Agent['integrations'][number] & {
+	type: 'schedule';
+	active: boolean;
+} {
+	return integration !== null && integration !== undefined && integration.type === 'schedule';
+}
+
 interface InjectRuntimeDependenciesParams {
 	agent: agents.Agent;
 	agentId: string;
@@ -281,6 +292,17 @@ export class AgentsService {
 		await this.agentRepository.manager.transaction(async (trx) => {
 			await this.agentPublishedVersionRepository.deleteByAgentId(agentId, trx);
 			agent.publishedVersion = null;
+
+			const hasActiveSchedule = (agent.integrations ?? []).some(
+				(integration) => isScheduleIntegration(integration) && integration.active,
+			);
+
+			if (hasActiveSchedule) {
+				agent.integrations = (agent.integrations ?? []).map((integration) =>
+					isScheduleIntegration(integration) ? { ...integration, active: false } : integration,
+				);
+				await trx.save(agent);
+			}
 		});
 
 		this.clearRuntimes(agentId);
@@ -291,6 +313,9 @@ export class AgentsService {
 		// eslint-disable-next-line import-x/no-cycle
 		const { ChatIntegrationService } = await import('./integrations/chat-integration.service');
 		await Container.get(ChatIntegrationService).disconnect(agentId);
+
+		const { AgentScheduleService } = await import('./integrations/agent-schedule.service');
+		Container.get(AgentScheduleService).deregister(agentId);
 
 		this.logger.debug('Unpublished SDK agent', { agentId, projectId });
 		return agent;
@@ -306,6 +331,16 @@ export class AgentsService {
 		await this.agentRepository.remove(agent);
 
 		this.clearRuntimes(agentId);
+
+		try {
+			const { AgentScheduleService } = await import('./integrations/agent-schedule.service');
+			Container.get(AgentScheduleService).deregister(agentId);
+		} catch (error) {
+			this.logger.warn('Failed to stop schedule on agent delete', {
+				agentId,
+				error: error instanceof Error ? error.message : error,
+			});
+		}
 
 		// Remove the test-chat thread + its messages so deleting an agent
 		// doesn't leave orphaned rows in agents_threads / agents_messages.
@@ -630,15 +665,10 @@ export class AgentsService {
 			if (!runtime) throw new Error(`Agent ${agentId} failed to reconstruct`);
 		}
 
-		yield* this.streamChatResponse(
-			runtime.agent,
-			agentId,
-			message,
-			threadId,
-			userId,
-			projectId,
-			integrationType,
-		);
+		yield* this.streamChatResponse(runtime.agent, agentId, message, threadId, userId, projectId, {
+			source: integrationType,
+			resourceId: userId,
+		});
 	}
 
 	/**
@@ -708,15 +738,54 @@ export class AgentsService {
 			if (!runtime) throw new Error(`Agent ${agentId} failed to reconstruct`);
 		}
 
-		yield* this.streamChatResponse(
-			runtime.agent,
-			agentId,
-			message,
-			threadId,
-			userId,
-			projectId,
-			integrationType,
-		);
+		yield* this.streamChatResponse(runtime.agent, agentId, message, threadId, userId, projectId, {
+			source: integrationType,
+			resourceId: userId,
+		});
+	}
+
+	/**
+	 * Execute a published agent for the local schedule trigger.
+	 *
+	 * Scheduled runs compile with a project user identity for RBAC/tool access,
+	 * but persist against a per-run resourceId so no memory is shared across runs.
+	 */
+	async *executeForSchedulePublished(
+		agentId: string,
+		message: string,
+		threadId: string,
+		userId: string,
+		projectId: string,
+		credentialProvider: CredentialProvider,
+		resourceId: string,
+	): AsyncGenerator<StreamChunk> {
+		const agentEntity = await this.agentRepository.findByIdAndProjectId(agentId, projectId);
+		if (!agentEntity) throw new NotFoundError(`Agent ${agentId} not found`);
+
+		const publishedSchema = agentEntity.publishedVersion?.schema;
+		if (!publishedSchema) {
+			throw new NotFoundError(`Agent ${agentId} is not published`);
+		}
+
+		const key = this.runtimeKey(agentId, userId, SCHEDULE_INTEGRATION_TYPE);
+		let runtime = this.runtimes.get(key);
+		if (!runtime) {
+			const publishedAgentData = { ...agentEntity, schema: publishedSchema } as Agent;
+			const agentInstance = await this.reconstructFromConfig(
+				publishedAgentData,
+				credentialProvider,
+				userId,
+				SCHEDULE_INTEGRATION_TYPE,
+			);
+			this.runtimes.set(key, { agent: agentInstance, agentId, userId });
+			runtime = this.runtimes.get(key);
+			if (!runtime) throw new Error(`Agent ${agentId} failed to reconstruct`);
+		}
+
+		yield* this.streamChatResponse(runtime.agent, agentId, message, threadId, userId, projectId, {
+			source: SCHEDULE_INTEGRATION_TYPE,
+			resourceId,
+		});
 	}
 
 	/**
@@ -732,12 +801,16 @@ export class AgentsService {
 		threadId: string,
 		userId: string,
 		projectId: string,
-		source?: string,
+		options?: {
+			source?: string;
+			resourceId?: string;
+		},
 	): AsyncGenerator<StreamChunk> {
 		const recorder = new ExecutionRecorder();
+		const resourceId = options?.resourceId ?? userId;
 
 		const resultStream = await agentInstance.stream(message, {
-			persistence: { threadId, resourceId: userId },
+			persistence: { threadId, resourceId },
 		});
 
 		const reader = resultStream.stream.getReader();
@@ -776,7 +849,7 @@ export class AgentsService {
 				userMessage: message,
 				record: messageRecord,
 				hitlStatus: recorder.suspended ? 'suspended' : undefined,
-				source,
+				source: options?.source,
 			})
 			.catch((error) => {
 				this.logger.warn('Failed to record agent execution', {

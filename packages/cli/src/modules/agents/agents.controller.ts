@@ -1,12 +1,15 @@
 import {
 	type AgentBuilderMessagesResponse,
+	type AgentIntegrationStatusResponse,
 	type AgentPersistedMessageDto,
+	type AgentScheduleConfig,
 	type AgentSseEvent,
 	AgentBuildResumeDto,
 	AgentChatMessageDto,
 	AgentIntegrationDto,
 	CreateAgentDto,
 	UpdateAgentConfigDto,
+	UpdateAgentScheduleDto,
 	UpdateAgentDto,
 } from '@n8n/api-types';
 import { AuthenticatedRequest } from '@n8n/db';
@@ -29,8 +32,22 @@ import {
 } from './agent-sse-stream';
 import { AgentsService } from './agents.service';
 import { AgentsBuilderService } from './builder/agents-builder.service';
+import { AgentScheduleService } from './integrations/agent-schedule.service';
 import { ChatIntegrationService } from './integrations/chat-integration.service';
 import { AgentRepository } from './repositories/agent.repository';
+
+const SCHEDULE_INTEGRATION_TYPE = 'schedule';
+
+function isCredentialBackedIntegration(
+	integration: { type: string; credentialId?: string } | null | undefined,
+): integration is { type: string; credentialId: string } {
+	return (
+		integration !== null &&
+		integration !== undefined &&
+		integration.type !== SCHEDULE_INTEGRATION_TYPE &&
+		typeof integration.credentialId === 'string'
+	);
+}
 
 /**
  * Builder side-effects: when the LLM streams arguments for `build_custom_tool`
@@ -71,6 +88,7 @@ export class AgentsController {
 		private readonly agentsBuilderService: AgentsBuilderService,
 		private readonly credentialsService: CredentialsService,
 		private readonly chatIntegrationService: ChatIntegrationService,
+		private readonly agentScheduleService: AgentScheduleService,
 		private readonly agentRepository: AgentRepository,
 		private readonly agentExecutionService: AgentExecutionService,
 	) {}
@@ -524,7 +542,9 @@ export class AgentsController {
 
 		// Persist the integration reference on the agent
 		const existing = agent.integrations ?? [];
-		const alreadyExists = existing.some((i) => i.type === type && i.credentialId === credentialId);
+		const alreadyExists = existing.some(
+			(i) => isCredentialBackedIntegration(i) && i.type === type && i.credentialId === credentialId,
+		);
 		if (!alreadyExists) {
 			agent.integrations = [...existing, { type, credentialId }];
 			await this.agentRepository.save(agent);
@@ -548,11 +568,65 @@ export class AgentsController {
 
 		// Remove the integration reference from the agent
 		agent.integrations = (agent.integrations ?? []).filter(
-			(i) => !(i.type === type && i.credentialId === credentialId),
+			(i) =>
+				!isCredentialBackedIntegration(i) || i.type !== type || i.credentialId !== credentialId,
 		);
 		await this.agentRepository.save(agent);
 
 		return { status: 'disconnected' };
+	}
+
+	@Get('/:agentId/integrations/schedule')
+	async getScheduleIntegration(
+		req: AuthenticatedRequest<{ projectId: string }>,
+		_res: Response,
+		@Param('agentId') agentId: string,
+	): Promise<AgentScheduleConfig> {
+		const agent = await this.agentRepository.findByIdAndProjectId(agentId, req.params.projectId);
+		if (!agent) throw new NotFoundError(`Agent "${agentId}" not found`);
+
+		return this.agentScheduleService.getConfig(agent);
+	}
+
+	@Put('/:agentId/integrations/schedule')
+	async updateScheduleIntegration(
+		req: AuthenticatedRequest<{ projectId: string }>,
+		_res: Response,
+		@Param('agentId') agentId: string,
+		@Body payload: UpdateAgentScheduleDto,
+	): Promise<AgentScheduleConfig> {
+		const agent = await this.agentRepository.findByIdAndProjectId(agentId, req.params.projectId);
+		if (!agent) throw new NotFoundError(`Agent "${agentId}" not found`);
+
+		return await this.agentScheduleService.saveConfig(
+			agent,
+			payload.cronExpression,
+			payload.wakeUpPrompt,
+		);
+	}
+
+	@Post('/:agentId/integrations/schedule/activate')
+	async activateScheduleIntegration(
+		req: AuthenticatedRequest<{ projectId: string }>,
+		_res: Response,
+		@Param('agentId') agentId: string,
+	): Promise<AgentScheduleConfig> {
+		const agent = await this.agentRepository.findByIdAndProjectId(agentId, req.params.projectId);
+		if (!agent) throw new NotFoundError(`Agent "${agentId}" not found`);
+
+		return await this.agentScheduleService.activate(agent);
+	}
+
+	@Post('/:agentId/integrations/schedule/deactivate')
+	async deactivateScheduleIntegration(
+		req: AuthenticatedRequest<{ projectId: string }>,
+		_res: Response,
+		@Param('agentId') agentId: string,
+	): Promise<AgentScheduleConfig> {
+		const agent = await this.agentRepository.findByIdAndProjectId(agentId, req.params.projectId);
+		if (!agent) throw new NotFoundError(`Agent "${agentId}" not found`);
+
+		return await this.agentScheduleService.deactivate(agent);
 	}
 
 	@Get('/:agentId/integrations/status')
@@ -560,11 +634,22 @@ export class AgentsController {
 		req: AuthenticatedRequest<{ projectId: string }>,
 		_res: Response,
 		@Param('agentId') agentId: string,
-	) {
+	): Promise<AgentIntegrationStatusResponse> {
 		const agent = await this.agentRepository.findByIdAndProjectId(agentId, req.params.projectId);
 		if (!agent) throw new NotFoundError(`Agent "${agentId}" not found`);
 
-		return this.chatIntegrationService.getStatus(agentId);
+		const chatStatus = this.chatIntegrationService.getStatus(agentId);
+		const integrations = [...(chatStatus.integrations ?? [])];
+		const schedule = this.agentScheduleService.getConfig(agent);
+
+		if (schedule.active) {
+			integrations.push({ type: SCHEDULE_INTEGRATION_TYPE });
+		}
+
+		return {
+			status: integrations.length > 0 ? 'connected' : 'disconnected',
+			integrations,
+		};
 	}
 
 	@Post('/:agentId/webhooks/:platform', { skipAuth: true, allowBots: true })

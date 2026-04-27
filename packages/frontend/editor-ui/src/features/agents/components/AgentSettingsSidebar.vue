@@ -375,6 +375,7 @@ watch(
 							:project-id="projectId"
 							:agent-id="agentId"
 							:agent-name="agentName"
+							:is-published="Boolean(agent?.publishedVersion)"
 							@update:connected-triggers="onTriggerConnectedTriggers"
 							@trigger-added="(payload) => emit('trigger-added', payload)"
 						/>
