@@ -177,14 +177,27 @@ export class McpSettingsService {
 	): Promise<void> {
 		if (workflowIds.length === 0) return;
 
+		let openWorkflowIds: string[];
+		try {
+			openWorkflowIds = await this.collaborationService.filterOpenWorkflowIds(workflowIds);
+		} catch (error) {
+			this.logger.warn('Failed to resolve open workflows for settings update broadcast', {
+				workflowCount: workflowIds.length,
+				cause: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
+
+		if (openWorkflowIds.length === 0) return;
+
 		let workflows: WorkflowEntity[];
 		try {
-			workflows = await this.workflowRepository.findByIds(workflowIds, {
+			workflows = await this.workflowRepository.findByIds(openWorkflowIds, {
 				fields: WORKFLOW_CHECKSUM_FIELDS,
 			});
 		} catch (error) {
 			this.logger.warn('Failed to load workflows for settings update broadcast', {
-				workflowCount: workflowIds.length,
+				workflowCount: openWorkflowIds.length,
 				cause: error instanceof Error ? error.message : String(error),
 			});
 			return;
@@ -192,7 +205,7 @@ export class McpSettingsService {
 
 		const workflowsById = new Map(workflows.map((workflow) => [workflow.id, workflow]));
 
-		for (const workflowId of workflowIds) {
+		for (const workflowId of openWorkflowIds) {
 			const workflow = workflowsById.get(workflowId);
 			if (!workflow) continue;
 

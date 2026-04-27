@@ -33,6 +33,9 @@ describe('McpSettingsService', () => {
 		findByKey = jest.fn<Promise<Settings | null>, [string]>();
 		upsert = jest.fn();
 		settingsRepository = { findByKey, upsert } as unknown as SettingsRepository;
+		collaborationService.filterOpenWorkflowIds.mockImplementation(
+			async (workflowIds) => workflowIds,
+		);
 		collaborationService.broadcastWorkflowSettingsUpdated.mockResolvedValue(undefined);
 
 		service = new McpSettingsService(
@@ -561,6 +564,7 @@ describe('McpSettingsService', () => {
 
 			await service.broadcastWorkflowMCPAvailabilityChanged(['wf-1'], true);
 
+			expect(collaborationService.filterOpenWorkflowIds).toHaveBeenCalledWith(['wf-1']);
 			expect(workflowRepository.findByIds).toHaveBeenCalledWith(
 				['wf-1'],
 				expect.objectContaining({ fields: expect.arrayContaining(['settings']) }),
@@ -568,6 +572,26 @@ describe('McpSettingsService', () => {
 			expect(collaborationService.broadcastWorkflowSettingsUpdated).toHaveBeenCalledTimes(1);
 			expect(collaborationService.broadcastWorkflowSettingsUpdated).toHaveBeenCalledWith(
 				'wf-1',
+				{ availableInMCP: true },
+				expect.stringMatching(/^[a-f0-9]{64}$/),
+			);
+		});
+
+		test('loads and broadcasts only changed workflows that are open', async () => {
+			collaborationService.filterOpenWorkflowIds.mockResolvedValueOnce(['wf-2']);
+			workflowRepository.findByIds.mockResolvedValue([
+				createWorkflow({ id: 'wf-2', settings: { availableInMCP: true } }),
+			]);
+
+			await service.broadcastWorkflowMCPAvailabilityChanged(['wf-1', 'wf-2'], true);
+
+			expect(workflowRepository.findByIds).toHaveBeenCalledWith(
+				['wf-2'],
+				expect.objectContaining({ fields: expect.arrayContaining(['settings']) }),
+			);
+			expect(collaborationService.broadcastWorkflowSettingsUpdated).toHaveBeenCalledTimes(1);
+			expect(collaborationService.broadcastWorkflowSettingsUpdated).toHaveBeenCalledWith(
+				'wf-2',
 				{ availableInMCP: true },
 				expect.stringMatching(/^[a-f0-9]{64}$/),
 			);
@@ -596,6 +620,34 @@ describe('McpSettingsService', () => {
 		test('does not load workflows when there are no changed ids', async () => {
 			await service.broadcastWorkflowMCPAvailabilityChanged([], true);
 
+			expect(collaborationService.filterOpenWorkflowIds).not.toHaveBeenCalled();
+			expect(workflowRepository.findByIds).not.toHaveBeenCalled();
+			expect(collaborationService.broadcastWorkflowSettingsUpdated).not.toHaveBeenCalled();
+		});
+
+		test('does not load workflows when none of the changed workflows are open', async () => {
+			collaborationService.filterOpenWorkflowIds.mockResolvedValueOnce([]);
+
+			await service.broadcastWorkflowMCPAvailabilityChanged(['wf-1'], true);
+
+			expect(workflowRepository.findByIds).not.toHaveBeenCalled();
+			expect(collaborationService.broadcastWorkflowSettingsUpdated).not.toHaveBeenCalled();
+		});
+
+		test('logs and returns when open workflow filtering fails', async () => {
+			collaborationService.filterOpenWorkflowIds.mockRejectedValueOnce(new Error('cache down'));
+
+			await expect(
+				service.broadcastWorkflowMCPAvailabilityChanged(['wf-1'], true),
+			).resolves.toBeUndefined();
+
+			expect(logger.warn).toHaveBeenCalledWith(
+				'Failed to resolve open workflows for settings update broadcast',
+				{
+					workflowCount: 1,
+					cause: 'cache down',
+				},
+			);
 			expect(workflowRepository.findByIds).not.toHaveBeenCalled();
 			expect(collaborationService.broadcastWorkflowSettingsUpdated).not.toHaveBeenCalled();
 		});
