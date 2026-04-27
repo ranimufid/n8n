@@ -4,7 +4,9 @@ import type { User } from '@n8n/db';
 import { SettingsRepository, WorkflowEntity, WorkflowRepository } from '@n8n/db';
 import { Service } from '@n8n/di';
 import { In } from '@n8n/typeorm';
+import { calculateWorkflowChecksum } from 'n8n-workflow';
 
+import { CollaborationService } from '@/collaboration/collaboration.service';
 import { BadRequestError } from '@/errors/response-errors/bad-request.error';
 import { CacheService } from '@/services/cache/cache.service';
 import { removeDefaultValues } from '@/workflow-helpers';
@@ -16,10 +18,24 @@ const KEY = 'mcp.access.enabled';
 
 const BULK_CHUNK_SIZE = 500;
 
+const WORKFLOW_CHECKSUM_FIELDS = [
+	'id',
+	'name',
+	'description',
+	'nodes',
+	'connections',
+	'settings',
+	'meta',
+	'pinData',
+	'isArchived',
+	'activeVersionId',
+];
+
 type BulkSetAvailableInMCPResult = {
 	updatedCount: number;
 	skippedCount: number;
 	failedCount: number;
+	changedIds: string[];
 	updatedIds?: string[];
 };
 
@@ -32,6 +48,7 @@ export class McpSettingsService {
 		private readonly workflowFinderService: WorkflowFinderService,
 		private readonly globalConfig: GlobalConfig,
 		private readonly logger: Logger,
+		private readonly collaborationService: CollaborationService,
 	) {}
 
 	async getEnabled(): Promise<boolean> {
@@ -84,6 +101,7 @@ export class McpSettingsService {
 				updatedCount: 0,
 				skippedCount: baselineSize,
 				failedCount: 0,
+				changedIds: [],
 				...(isWorkflowIdsScope ? { updatedIds: [] } : {}),
 			};
 		}
@@ -148,8 +166,50 @@ export class McpSettingsService {
 			updatedCount: confirmedIds.length,
 			skippedCount: Math.max(0, baselineSize - confirmedIds.length - failedCount),
 			failedCount,
+			changedIds: writtenIds,
 			...(isWorkflowIdsScope ? { updatedIds: confirmedIds } : {}),
 		};
+	}
+
+	async broadcastWorkflowMCPAvailabilityChanged(
+		workflowIds: string[],
+		availableInMCP: boolean,
+	): Promise<void> {
+		if (workflowIds.length === 0) return;
+
+		let workflows: WorkflowEntity[];
+		try {
+			workflows = await this.workflowRepository.findByIds(workflowIds, {
+				fields: WORKFLOW_CHECKSUM_FIELDS,
+			});
+		} catch (error) {
+			this.logger.warn('Failed to load workflows for settings update broadcast', {
+				workflowCount: workflowIds.length,
+				cause: error instanceof Error ? error.message : String(error),
+			});
+			return;
+		}
+
+		const workflowsById = new Map(workflows.map((workflow) => [workflow.id, workflow]));
+
+		for (const workflowId of workflowIds) {
+			const workflow = workflowsById.get(workflowId);
+			if (!workflow) continue;
+
+			try {
+				const checksum = await calculateWorkflowChecksum(workflow);
+				await this.collaborationService.broadcastWorkflowSettingsUpdated(
+					workflowId,
+					{ availableInMCP },
+					checksum,
+				);
+			} catch (error) {
+				this.logger.warn('Failed to broadcast workflow settings update', {
+					workflowId,
+					cause: error instanceof Error ? error.message : String(error),
+				});
+			}
+		}
 	}
 
 	private async resolveCandidateIds(
