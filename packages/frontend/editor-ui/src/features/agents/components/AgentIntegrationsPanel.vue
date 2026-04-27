@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { AGENT_SCHEDULE_TRIGGER_TYPE } from '@n8n/api-types';
 import { ref, computed, onMounted, watch } from 'vue';
 import { N8nButton, N8nCard, N8nDialog, N8nIcon, N8nText } from '@n8n/design-system';
 import N8nSelect from '@n8n/design-system/components/N8nSelect';
@@ -14,7 +15,6 @@ import {
 } from '../composables/useAgentApi';
 import AgentScheduleTriggerCard from './AgentScheduleTriggerCard.vue';
 
-const SCHEDULE_INTEGRATION_TYPE = 'schedule';
 const props = defineProps<{
 	projectId: string;
 	agentId: string;
@@ -204,7 +204,7 @@ function computeConnectedTriggers(): string[] {
 		.sort();
 
 	if (scheduleActive.value) {
-		triggers.push(SCHEDULE_INTEGRATION_TYPE);
+		triggers.push(AGENT_SCHEDULE_TRIGGER_TYPE);
 	}
 
 	return triggers.sort();
@@ -221,13 +221,15 @@ async function fetchStatus() {
 			props.projectId,
 			props.agentId,
 		);
+
 		for (const config of integrationConfigs) {
 			statuses.value[config.type] = 'disconnected';
 			connectedCredentials.value[config.type] = '';
 		}
+
 		scheduleActive.value = false;
 		for (const integration of result.integrations ?? []) {
-			if (integration.type === SCHEDULE_INTEGRATION_TYPE) {
+			if (integration.type === AGENT_SCHEDULE_TRIGGER_TYPE) {
 				scheduleActive.value = true;
 				continue;
 			}
@@ -244,6 +246,7 @@ async function fetchStatus() {
 		}
 		scheduleActive.value = false;
 	}
+
 	emitConnectedTriggers();
 }
 
@@ -254,7 +257,7 @@ function onScheduleStatusChange(active: boolean) {
 
 function onScheduleTriggerAdded() {
 	emit('trigger-added', {
-		triggerType: SCHEDULE_INTEGRATION_TYPE,
+		triggerType: AGENT_SCHEDULE_TRIGGER_TYPE,
 		triggers: computeConnectedTriggers(),
 	});
 }

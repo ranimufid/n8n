@@ -1,4 +1,5 @@
 import {
+	AGENT_SCHEDULE_TRIGGER_TYPE,
 	type AgentBuilderMessagesResponse,
 	type AgentIntegrationStatusResponse,
 	type AgentPersistedMessageDto,
@@ -11,6 +12,7 @@ import {
 	UpdateAgentConfigDto,
 	UpdateAgentScheduleDto,
 	UpdateAgentDto,
+	isAgentCredentialIntegration,
 } from '@n8n/api-types';
 import { AuthenticatedRequest } from '@n8n/db';
 import { Body, Delete, Get, Param, Patch, Post, Put, RestController } from '@n8n/decorators';
@@ -35,19 +37,6 @@ import { AgentsBuilderService } from './builder/agents-builder.service';
 import { AgentScheduleService } from './integrations/agent-schedule.service';
 import { ChatIntegrationService } from './integrations/chat-integration.service';
 import { AgentRepository } from './repositories/agent.repository';
-
-const SCHEDULE_INTEGRATION_TYPE = 'schedule';
-
-function isCredentialBackedIntegration(
-	integration: { type: string; credentialId?: string } | null | undefined,
-): integration is { type: string; credentialId: string } {
-	return (
-		integration !== null &&
-		integration !== undefined &&
-		integration.type !== SCHEDULE_INTEGRATION_TYPE &&
-		typeof integration.credentialId === 'string'
-	);
-}
 
 /**
  * Builder side-effects: when the LLM streams arguments for `build_custom_tool`
@@ -543,7 +532,7 @@ export class AgentsController {
 		// Persist the integration reference on the agent
 		const existing = agent.integrations ?? [];
 		const alreadyExists = existing.some(
-			(i) => isCredentialBackedIntegration(i) && i.type === type && i.credentialId === credentialId,
+			(i) => isAgentCredentialIntegration(i) && i.type === type && i.credentialId === credentialId,
 		);
 		if (!alreadyExists) {
 			agent.integrations = [...existing, { type, credentialId }];
@@ -568,8 +557,7 @@ export class AgentsController {
 
 		// Remove the integration reference from the agent
 		agent.integrations = (agent.integrations ?? []).filter(
-			(i) =>
-				!isCredentialBackedIntegration(i) || i.type !== type || i.credentialId !== credentialId,
+			(i) => !isAgentCredentialIntegration(i) || i.type !== type || i.credentialId !== credentialId,
 		);
 		await this.agentRepository.save(agent);
 
@@ -639,16 +627,13 @@ export class AgentsController {
 		if (!agent) throw new NotFoundError(`Agent "${agentId}" not found`);
 
 		const chatStatus = this.chatIntegrationService.getStatus(agentId);
-		const integrations = [...(chatStatus.integrations ?? [])];
 		const schedule = this.agentScheduleService.getConfig(agent);
-
-		if (schedule.active) {
-			integrations.push({ type: SCHEDULE_INTEGRATION_TYPE });
-		}
+		const scheduleIntegrations = schedule.active ? [{ type: AGENT_SCHEDULE_TRIGGER_TYPE }] : [];
+		const connectedIntegrations = [...chatStatus.integrations, ...scheduleIntegrations];
 
 		return {
-			status: integrations.length > 0 ? 'connected' : 'disconnected',
-			integrations,
+			status: connectedIntegrations.length > 0 ? 'connected' : 'disconnected',
+			integrations: connectedIntegrations,
 		};
 	}
 
